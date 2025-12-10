@@ -16,6 +16,8 @@ from scipy.sparse import csr_matrix
 from scipy import sparse
 import psutil
 import scipy.sparse as sps
+from scipy.sparse.csgraph import laplacian
+from scipy.sparse.linalg import expm
 from genomedisco import processing
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from matplotlib.ticker import MultipleLocator
@@ -29,24 +31,11 @@ def to_transition(mtogether):
     D = sps.spdiags(1.0/sums.flatten(), [0], mtogether.get_shape()[0], mtogether.get_shape()[1], format='csr')
     return D.dot(mtogether)
 
-def random_walk(m_input,t):
-    #return m_input.__pow__(t)
-    #return np.linalg.matrix_power(m_input,t)
-    return m_input.__pow__(t)
-
-def write_diff_vector_bedfile(diff_vector,nodes,nodes_idx,out_filename):
-    out=gzip.open(out_filename,'w')
-    for i in range(diff_vector.shape[0]):
-        node_name=nodes_idx[i]
-        node_dict=nodes[node_name]
-        out.write(str(node_dict['chr'])+'\t'+str(node_dict['start'])+'\t'+str(node_dict['end'])+'\t'+node_name+'\t'+str(diff_vector[i][0])+'\n')
-    out.close()
-
-class DiscoRandomWalks:
+class Diffusion:
 
     def __init__(self, args):
         self.args = args
-    
+
     def compute_reproducibility(self,m1_csr,m2_csr,args):
 
         #make symmetric
@@ -73,31 +62,42 @@ class DiscoRandomWalks:
         nonzero_total=len(list(set(nonzero_1).union(set(nonzero_2))))
         nonzero_total=0.5*(1.0*len(list(set(nonzero_1)))+1.0*len(list(set(nonzero_2))))
 
+        # alphas = [0, 0.25, 0.5, 1, 2, 4, 8]
+        # alphas = [0, 0.25, 0.5]
+        alphas = [0, 4]
+
         scores=[]
         if True:
             diff_vector=np.zeros((m1.shape[0],1))
-            for t in range(1,args.tmax+1): #range(args.tmin,args.tmax+1):     
+            for a in alphas:
                 extra_text=' (not included in score calculation)'
-                if t==1:
-                    rw1=copy.deepcopy(m1)
-                    rw2=copy.deepcopy(m2)
+                if a == 0:
+                    gd1=copy.deepcopy(m1)
+                    gd2=copy.deepcopy(m2)
+
+                    l1 = laplacian(m1, normed=True)
+                    l2 = laplacian(m2, normed=True)
                 else:
-                    rw1=rw1.dot(m1)
-                    rw2=rw2.dot(m2)
-                if t>=args.tmin:
-                    diff_vector+=abs(rw1-rw2).sum(axis=1)
-                    diff=abs(rw1-rw2).sum()#+euclidean(rw1.toarray().flatten(),rw2.toarray().flatten()))
+                    k1 = expm(-a * l1)
+                    k2 = expm(-a * l2)
+                    gd1 = k1.dot(m1)
+                    gd2 = k2.dot(m2)
+                    # gd1 = k1 * m1 * k1.T
+                    # gd2 = k2 * m2 * k2.T
+                if a != 0:
+                    diff_vector+=abs(gd1-gd2).sum(axis=1)
+                    diff=abs(gd1-gd2).sum()#+euclidean(rw1.toarray().flatten(),rw2.toarray().flatten()))
                     scores.append(1.0*float(diff)/float(nonzero_total))
                     extra_text=' | score='+str('{:.3f}'.format(1.0-float(diff)/float(nonzero_total)))
-                print 'GenomeDISCO | '+strftime("%c")+' | done t='+str(t)+extra_text
+                print 'GenomeDISCO | '+strftime("%c")+' | done a='+str(a)+extra_text
 
         #compute final score
-        ts=range(args.tmin,args.tmax+1)
-        denom=len(ts)-1
+        alphs = alphas[1:]
+        denom=len(alphs)-1
         if args.tmin==args.tmax:
             auc=scores[0]
         else:
-            auc=metrics.auc(range(len(ts)),scores)/denom
+            auc=metrics.auc(range(len(alphs)),scores)/denom
         reproducibility=1.0-auc
 
         
@@ -111,12 +111,12 @@ class DiscoRandomWalks:
             diff_vector_file=args.outdir+'/'+args.outpref+'.'+args.m1name+'.vs.'+args.m2name+'.diffScore.bed.gz'
             #nodes,nodes_idx,blacklist_nodes=processing.read_nodes_from_bed(args.node_file,args.blacklist)
             #write_diff_vector_bedfile(final_diff_vector,nodes,nodes_idx,diff_vector_file)
-        
+
         #now, make 1 plot
         if not args.concise_analysis:
             originals=np.triu(m1.toarray())-np.triu(m2.toarray()).T
-            rw=np.triu(rw1.toarray())-np.triu(rw2.toarray()).T
-            diff_mat=(rw1-rw2).toarray()
+            rw=np.triu(gd1.toarray())-np.triu(gd2.toarray()).T
+            diff_mat=(gd1-gd2).toarray()
             diff_vector=final_diff_vector
             #==================
             figwidth=40
@@ -144,10 +144,10 @@ class DiscoRandomWalks:
                     last_tick+=1.0*ticksize
                 current_tick+=1.0*resolution
                 start+=1
-            
+
             fig, plots = plt.subplots(1,3)
             fig.set_size_inches(figwidth,figheight)
-            
+
             #original data
             #=============
             colorbar_ticks=[range_originals[0],0,range_originals[1]]
@@ -172,8 +172,8 @@ class DiscoRandomWalks:
             plots[0].set_xticklabels([],size=15)
             plots[0].set_yticklabels(ticknames,size=15)
             plots[0].yaxis.tick_right()
-            
-            #random walk data
+
+            #diffusion data
             #================
             colorbar_ticks=[range_rw[0],0,range_rw[1]]
             im1 = plots[1].matshow(rw,vmin=range_rw[0],vmax=range_rw[1],cmap='bwr')
@@ -197,8 +197,8 @@ class DiscoRandomWalks:
             plots[1].set_xticklabels([],size=15)
             plots[1].set_yticklabels(ticknames,size=15)
             plots[1].yaxis.tick_right()
-            
-            #random walk data differences
+
+            #diffusion data differences
             #============================
             colorbar_ticks=[range_diff_mat[0],0,range_diff_mat[1]]
             im1 = plots[2].matshow(diff_mat,vmin=range_diff_mat[0],vmax=range_diff_mat[1],cmap='bwr')
@@ -224,7 +224,6 @@ class DiscoRandomWalks:
             fname=args.outdir+'/'+args.outpref+'.'+args.m1name+'.vs.'+args.m2name+'.GenomeDISCO.png'
             plt.savefig(fname)
 
-            
         #for the report
         reproducibility_text=''
         if not args.concise_analysis:
@@ -232,43 +231,14 @@ class DiscoRandomWalks:
             reproducibility_text=reproducibility_text+'<br>\n'
             reproducibility_text=reproducibility_text+'Reproducibility score = '+str(reproducibility)+'\n'
             reproducibility_text=reproducibility_text+'<br>\n'
-            '''
-            rcParams['font.size']= 30
-            rcParams['figure.figsize'] = 7,7
-            rcParams['xtick.labelsize'] = 20
-            rcParams['ytick.labelsize'] = 20
-            plt.close("all")
-            plt.plot(range(args.tmin,args.tmax+1),scores,'bo-')
-            eps=0.02
-            for i in range(len(ts)):
-                x=range(args.tmin,args.tmax+1)[i]
-                y=scores[i]
-                plt.text(x,y+eps,str(float("{0:.2f}".format(y))),fontsize=15)
-            plt.xlabel('t')
-            plt.xticks(range(min(1,args.tmin),args.tmax+2))
-            plt.yticks([0.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0])
-            plt.ylim(0,1.0)
-            plt.ylabel('difference/node')
-            plt.xlabel('random walk iteration')
-            plt.axvline(args.tmax, color='gray', linestyle='dashed', linewidth=2)
-            plt.axvline(args.tmin, color='gray', linestyle='dashed', linewidth=2)
-            plt.show()
-            adj=0.2
-            plt.gcf().subplots_adjust(bottom=adj)
-            plt.gcf().subplots_adjust(left=adj)
-            fname=args.outdir+'/'+args.outpref+'.'+args.m1name+'.vs.'+args.m2name+'.DiscoRandomWalks.Differences.png'
-            
-        if not args.concise_analysis:
-            plt.savefig(fname)
-            reproducibility_text=reproducibility_text+'<img src="'+os.path.basename(fname)+'" width="400" height="400"></td>'+'\n'
-        '''
+
         reproducibility_text_rw=''
         if not args.concise_analysis:
             reproducibility_text_rw="<table>"+'\n'
             reproducibility_text_rw=reproducibility_text_rw+'<tr>'+'\n'
             for t in range(args.tmin,args.tmax+1):
                 reproducibility_text_rw=reproducibility_text_rw+'<td>'+'\n'
-                fname=args.outdir+'/'+args.outpref+'.'+args.m1name+'.vs.'+args.m2name+'.DiscoRandomWalks.'+str(t)+'.png'
+                fname=args.outdir+'/'+args.outpref+'.'+args.m1name+'.vs.'+args.m2name+'.Diffusion.'+str(t)+'.png'
                 reproducibility_text_rw=reproducibility_text_rw+'<img src="'+os.path.basename(fname)+'" width="400" height="400"></td>'+'\n'
                 reproducibility_text_rw=reproducibility_text_rw+'</td>'+'\n'
             reproducibility_text_rw=reproducibility_text_rw+"</table>"+'\n'

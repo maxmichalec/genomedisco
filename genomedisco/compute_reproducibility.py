@@ -8,6 +8,8 @@ from time import gmtime, strftime
 from genomedisco import data_operations, processing, visualization
 from genomedisco.comparison_types.disco_random_walks import DiscoRandomWalks
 from genomedisco.comparison_types.disco_random_walks_binarized_matrices import DiscoRandomWalks_binarizedMatrices
+from genomedisco.comparison_types.diffusion import Diffusion
+from genomedisco.comparison_types.baseline_smoothing import Baseline, FixedWindow, GaussianSmoothing
 
 def main():
     parser = argparse.ArgumentParser(description='Compute reproducibility of 3D genome data')
@@ -90,6 +92,14 @@ def main():
     print "GenomeDISCO | "+strftime("%c")+" | Computing reproducibility score"
     if args.method=='RandomWalks':
         comparer=DiscoRandomWalks(args)
+    elif args.method == 'Diffusion':
+        comparer = Diffusion(args)
+    elif args.method == 'Baseline':
+        comparer = Baseline(args)
+    elif args.method == 'FixedWindow':
+        comparer = FixedWindow(args)
+    elif args.method == 'Gaussian':
+        comparer = GaussianSmoothing(args)
     reproducibility_text,score,scores=comparer.compute_reproducibility(m1_norm,m2_norm,args)
 
     '''

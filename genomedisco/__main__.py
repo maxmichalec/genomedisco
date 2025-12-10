@@ -6,11 +6,12 @@ from genomedisco import concordance_utils
 
 def main():
     command_methods = {'preprocess': concordance_utils.preprocess,
-                         'concordance': concordance_utils.concordance,
-                         'summary': concordance_utils.summary,
-                         'cleanup':concordance_utils.clean_up,
-                       'run_all': concordance_utils.run_all}
-    #TODO: add command that just smooths
+                        # 'smooth': concordance_utils.smooth,
+                        'concordance': concordance_utils.concordance,
+                        'summary': concordance_utils.summary,
+                        'cleanup':concordance_utils.clean_up,
+                        'run_all': concordance_utils.run_all}
+
     command, args = concordance_utils.parse_args_genomedisco()
     if command!='cleanup':
         args['methods']='GenomeDISCO'
